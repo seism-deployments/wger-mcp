@@ -5,525 +5,603 @@ import uvicorn
 from fastmcp import FastMCP
 import httpx
 import os
-import json
 from typing import Optional
 
-mcp = FastMCP("wger-workout-manager")
+mcp = FastMCP("wger Workout Manager")
 
-DEFAULT_BASE_URL = "https://wger.de"
-API_PATH = "/api/v2"
+BASE_URL = "https://wger.de/api/v2"
+API_TOKEN = os.environ.get("WGER_API_TOKEN", "")
 
 
-def build_headers(auth_token: Optional[str] = None) -> dict:
-    headers = {"Content-Type": "application/json", "Accept": "application/json"}
-    if auth_token:
-        headers["Authorization"] = f"Token {auth_token}"
+def get_headers() -> dict:
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    if API_TOKEN:
+        headers["Authorization"] = f"Token {API_TOKEN}"
     return headers
 
 
-def build_api_url(base_url: str, endpoint: str) -> str:
-    base = base_url.rstrip("/")
-    ep = endpoint.lstrip("/")
-    return f"{base}{API_PATH}/{ep}"
-
-
-async def api_request(
-    method: str,
-    url: str,
-    headers: dict,
-    params: Optional[dict] = None,
-    json_data: Optional[dict] = None,
-) -> dict:
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        kwargs = {"headers": headers}
-        if params:
-            kwargs["params"] = {k: v for k, v in params.items() if v is not None}
-        if json_data is not None:
-            kwargs["json"] = json_data
-        response = await client.request(method, url, **kwargs)
-        if response.status_code == 204:
-            return {"success": True, "status_code": 204}
-        try:
-            return {"status_code": response.status_code, "data": response.json()}
-        except Exception:
-            return {"status_code": response.status_code, "data": response.text}
-
+# ─── Exercise Tools ───────────────────────────────────────────────────────────
 
 @mcp.tool()
-async def get_api_info(base_url: str, auth_token: Optional[str] = None) -> dict:
-    """Retrieve general API information, available endpoints, and server version details from the wger instance."""
-    headers = build_headers(auth_token)
-    base = base_url.rstrip("/")
-    api_root_url = f"{base}{API_PATH}/"
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(api_root_url, headers=headers)
-        try:
-            api_root = response.json()
-        except Exception:
-            api_root = response.text
-
-        result = {
-            "status_code": response.status_code,
-            "api_root": api_root,
-            "base_url": base_url,
-            "api_version": "v2",
-        }
-
-        # Try to get server info from status endpoint
-        try:
-            status_response = await client.get(
-                f"{base}/api/v2/status/", headers=headers
-            )
-            if status_response.status_code == 200:
-                result["server_status"] = status_response.json()
-        except Exception:
-            pass
-
-        return result
-
-
-@mcp.tool()
-async def manage_workouts(
-    base_url: str,
-    auth_token: str,
-    action: str,
-    workout_id: Optional[int] = None,
-    data: Optional[str] = None,
+async def list_exercises(
+    language: Optional[str] = None,
+    category: Optional[int] = None,
+    muscles: Optional[int] = None,
+    equipment: Optional[int] = None,
+    offset: int = 0,
+    limit: int = 20
 ) -> dict:
-    """Create, retrieve, update, or delete workout routines and training plans."""
-    headers = build_headers(auth_token)
-    json_data = json.loads(data) if data else None
-
-    if action == "list":
-        url = build_api_url(base_url, "workout/")
-        return await api_request("GET", url, headers)
-
-    elif action == "get":
-        if not workout_id:
-            return {"error": "workout_id is required for 'get' action"}
-        url = build_api_url(base_url, f"workout/{workout_id}/")
-        return await api_request("GET", url, headers)
-
-    elif action == "create":
-        url = build_api_url(base_url, "workout/")
-        return await api_request("POST", url, headers, json_data=json_data or {})
-
-    elif action == "update":
-        if not workout_id:
-            return {"error": "workout_id is required for 'update' action"}
-        url = build_api_url(base_url, f"workout/{workout_id}/")
-        return await api_request("PATCH", url, headers, json_data=json_data or {})
-
-    elif action == "delete":
-        if not workout_id:
-            return {"error": "workout_id is required for 'delete' action"}
-        url = build_api_url(base_url, f"workout/{workout_id}/")
-        return await api_request("DELETE", url, headers)
-
-    else:
-        # Try to also list training days and exercises if listing
-        return {"error": f"Unknown action '{action}'. Use: list, get, create, update, delete"}
-
-
-@mcp.tool()
-async def track_body_metrics(
-    base_url: str,
-    auth_token: str,
-    metric_type: str,
-    action: str,
-    entry_id: Optional[int] = None,
-    data: Optional[str] = None,
-) -> dict:
-    """Log and retrieve body weight entries and custom body measurements."""
-    headers = build_headers(auth_token)
-    json_data = json.loads(data) if data else None
-
-    # Determine endpoint based on metric type
-    if metric_type == "weight":
-        base_endpoint = "weightentry"
-    elif metric_type == "measurement":
-        base_endpoint = "measurement"
-    elif metric_type == "measurement_category":
-        base_endpoint = "measurement-category"
-    else:
-        return {
-            "error": f"Unknown metric_type '{metric_type}'. Use: weight, measurement, measurement_category"
-        }
-
-    if action == "list":
-        url = build_api_url(base_url, f"{base_endpoint}/")
-        params = {}
-        if json_data:
-            params.update(json_data)
-        return await api_request("GET", url, headers, params=params if params else None)
-
-    elif action == "get":
-        if not entry_id:
-            return {"error": "entry_id is required for 'get' action"}
-        url = build_api_url(base_url, f"{base_endpoint}/{entry_id}/")
-        return await api_request("GET", url, headers)
-
-    elif action == "create":
-        url = build_api_url(base_url, f"{base_endpoint}/")
-        return await api_request("POST", url, headers, json_data=json_data or {})
-
-    elif action == "update":
-        if not entry_id:
-            return {"error": "entry_id is required for 'update' action"}
-        url = build_api_url(base_url, f"{base_endpoint}/{entry_id}/")
-        return await api_request("PATCH", url, headers, json_data=json_data or {})
-
-    elif action == "delete":
-        if not entry_id:
-            return {"error": "entry_id is required for 'delete' action"}
-        url = build_api_url(base_url, f"{base_endpoint}/{entry_id}/")
-        return await api_request("DELETE", url, headers)
-
-    else:
-        return {"error": f"Unknown action '{action}'. Use: list, get, create, update, delete"}
-
-
-@mcp.tool()
-async def manage_nutrition(
-    base_url: str,
-    auth_token: str,
-    action: str,
-    plan_id: Optional[int] = None,
-    data: Optional[str] = None,
-) -> dict:
-    """Create and manage nutrition/diet plans, log meals and food items, and retrieve nutritional values."""
-    headers = build_headers(auth_token)
-    json_data = json.loads(data) if data else None
-
-    if action == "list_plans":
-        url = build_api_url(base_url, "nutritionplan/")
-        return await api_request("GET", url, headers)
-
-    elif action == "get_plan":
-        if not plan_id:
-            return {"error": "plan_id is required for 'get_plan' action"}
-        url = build_api_url(base_url, f"nutritionplan/{plan_id}/")
-        result = await api_request("GET", url, headers)
-        # Also fetch nutritional values for the plan
-        values_url = build_api_url(base_url, f"nutritionplan/{plan_id}/nutritional_values/")
-        values_result = await api_request("GET", values_url, headers)
-        return {"plan": result, "nutritional_values": values_result}
-
-    elif action == "create_plan":
-        url = build_api_url(base_url, "nutritionplan/")
-        return await api_request("POST", url, headers, json_data=json_data or {})
-
-    elif action == "delete_plan":
-        if not plan_id:
-            return {"error": "plan_id is required for 'delete_plan' action"}
-        url = build_api_url(base_url, f"nutritionplan/{plan_id}/")
-        return await api_request("DELETE", url, headers)
-
-    elif action == "log_meal":
-        # Log a nutrition diary entry
-        url = build_api_url(base_url, "nutritiondiary/")
-        return await api_request("POST", url, headers, json_data=json_data or {})
-
-    elif action == "list_logs":
-        url = build_api_url(base_url, "nutritiondiary/")
-        params = {}
-        if json_data:
-            params.update(json_data)
-        return await api_request("GET", url, headers, params=params if params else None)
-
-    elif action == "get_nutritional_values":
-        if not plan_id:
-            return {"error": "plan_id is required for 'get_nutritional_values' action"}
-        url = build_api_url(base_url, f"nutritionplan/{plan_id}/nutritional_values/")
-        return await api_request("GET", url, headers)
-
-    elif action == "list_meals":
-        url = build_api_url(base_url, "meal/")
-        return await api_request("GET", url, headers)
-
-    elif action == "create_meal":
-        url = build_api_url(base_url, "meal/")
-        return await api_request("POST", url, headers, json_data=json_data or {})
-
-    elif action == "list_meal_items":
-        url = build_api_url(base_url, "mealitem/")
-        params = {}
-        if json_data:
-            params.update(json_data)
-        return await api_request("GET", url, headers, params=params if params else None)
-
-    elif action == "create_meal_item":
-        url = build_api_url(base_url, "mealitem/")
-        return await api_request("POST", url, headers, json_data=json_data or {})
-
-    elif action == "search_food":
-        url = build_api_url(base_url, "ingredient/")
-        params = {}
-        if json_data:
-            params.update(json_data)
-        return await api_request("GET", url, headers, params=params if params else None)
-
-    else:
-        return {
-            "error": f"Unknown action '{action}'. Use: list_plans, get_plan, create_plan, delete_plan, log_meal, list_logs, get_nutritional_values, list_meals, create_meal, list_meal_items, create_meal_item, search_food"
-        }
-
-
-@mcp.tool()
-async def search_exercises(
-    base_url: str,
-    auth_token: Optional[str] = None,
-    query: Optional[str] = None,
-    language: Optional[str] = "english",
-    muscle_group: Optional[str] = None,
-    equipment: Optional[str] = None,
-    exercise_id: Optional[int] = None,
-) -> dict:
-    """Search and retrieve exercises from the wger exercise wiki."""
-    headers = build_headers(auth_token)
-
-    # Language name to ID mapping (wger uses numeric IDs)
-    language_map = {
-        "english": 2,
-        "german": 1,
-        "bulgarian": 3,
-        "spanish": 4,
-        "russian": 5,
-        "dutch": 6,
-        "portuguese": 7,
-        "arabic": 8,
-        "turkish": 9,
-        "swedish": 10,
-        "norwegian": 11,
-        "french": 14,
-    }
-
-    # Muscle group name to ID mapping
-    muscle_map = {
-        "chest": 4,
-        "pectorals": 4,
-        "back": 12,
-        "lats": 12,
-        "shoulders": 13,
-        "deltoids": 13,
-        "biceps": 1,
-        "triceps": 5,
-        "abs": 6,
-        "abdominals": 6,
-        "legs": 10,
-        "quads": 10,
-        "quadriceps": 10,
-        "hamstrings": 11,
-        "glutes": 8,
-        "calves": 7,
-        "forearms": 9,
-        "traps": 14,
-        "trapezius": 14,
-    }
-
-    # Equipment name to ID mapping
-    equipment_map = {
-        "barbell": 1,
-        "sj barbell": 2,
-        "dumbbell": 3,
-        "gym mat": 4,
-        "swiss ball": 5,
-        "pull-up bar": 6,
-        "bodyweight": 7,
-        "body weight": 7,
-        "cable": 8,
-        "machine": 9,
-        "bench": 10,
-        "kettlebell": 11,
-        "bands": 12,
-        "resistance bands": 12,
-        "plate": 13,
-    }
-
-    if exercise_id:
-        url = build_api_url(base_url, f"exercise/{exercise_id}/")
-        exercise_result = await api_request("GET", url, headers)
-
-        # Also get exercise info (translations, images, etc.)
-        info_url = build_api_url(base_url, f"exerciseinfo/{exercise_id}/")
-        info_result = await api_request("GET", info_url, headers)
-        return {"exercise": exercise_result, "exercise_info": info_result}
-
-    if query:
-        # Use the search endpoint
-        search_url = build_api_url(base_url, "exercise/search/")
-        lang_id = language_map.get(language.lower() if language else "english", 2)
-        params = {"term": query, "language": language or "english", "format": "json"}
-        return await api_request("GET", search_url, headers, params=params)
-
-    # Use exerciseinfo for filtered listing
-    url = build_api_url(base_url, "exerciseinfo/")
-    params = {}
-
+    """List exercises from the wger exercise database. Filter by language code (e.g. 'english'), category ID, muscle ID, or equipment ID."""
+    params = {"offset": offset, "limit": limit, "format": "json"}
     if language:
-        lang_id = language_map.get(language.lower(), 2)
-        params["language"] = lang_id
-
-    if muscle_group:
-        muscle_id = muscle_map.get(muscle_group.lower())
-        if muscle_id:
-            params["muscles"] = muscle_id
-        else:
-            try:
-                params["muscles"] = int(muscle_group)
-            except ValueError:
-                pass
-
-    if equipment:
-        equip_id = equipment_map.get(equipment.lower())
-        if equip_id:
-            params["equipment"] = equip_id
-        else:
-            try:
-                params["equipment"] = int(equipment)
-            except ValueError:
-                pass
-
-    return await api_request("GET", url, headers, params=params)
+        params["language"] = language
+    if category is not None:
+        params["category"] = category
+    if muscles is not None:
+        params["muscles"] = muscles
+    if equipment is not None:
+        params["equipment"] = equipment
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/exercise/", headers=get_headers(), params=params)
+        response.raise_for_status()
+        return response.json()
 
 
 @mcp.tool()
-async def log_workout_session(
-    base_url: str,
-    auth_token: str,
-    action: str,
-    log_id: Optional[int] = None,
-    data: Optional[str] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-) -> dict:
-    """Record and retrieve workout session logs including exercises performed, sets, reps, and weights."""
-    headers = build_headers(auth_token)
-    json_data = json.loads(data) if data else None
-
-    if action == "list":
-        url = build_api_url(base_url, "workoutsession/")
-        params = {}
-        if start_date:
-            params["date__gte"] = start_date
-        if end_date:
-            params["date__lte"] = end_date
-        return await api_request("GET", url, headers, params=params if params else None)
-
-    elif action == "get":
-        if not log_id:
-            return {"error": "log_id is required for 'get' action"}
-        url = build_api_url(base_url, f"workoutsession/{log_id}/")
-        return await api_request("GET", url, headers)
-
-    elif action == "create":
-        url = build_api_url(base_url, "workoutsession/")
-        return await api_request("POST", url, headers, json_data=json_data or {})
-
-    elif action == "update":
-        if not log_id:
-            return {"error": "log_id is required for 'update' action"}
-        url = build_api_url(base_url, f"workoutsession/{log_id}/")
-        return await api_request("PATCH", url, headers, json_data=json_data or {})
-
-    elif action == "delete":
-        if not log_id:
-            return {"error": "log_id is required for 'delete' action"}
-        url = build_api_url(base_url, f"workoutsession/{log_id}/")
-        return await api_request("DELETE", url, headers)
-
-    elif action == "list_logs":
-        # Exercise logs (individual sets/reps/weights)
-        url = build_api_url(base_url, "workoutlog/")
-        params = {}
-        if start_date:
-            params["date__gte"] = start_date
-        if end_date:
-            params["date__lte"] = end_date
-        if json_data:
-            params.update(json_data)
-        return await api_request("GET", url, headers, params=params if params else None)
-
-    elif action == "create_log":
-        # Create an individual exercise log entry
-        url = build_api_url(base_url, "workoutlog/")
-        return await api_request("POST", url, headers, json_data=json_data or {})
-
-    elif action == "get_log":
-        if not log_id:
-            return {"error": "log_id is required for 'get_log' action"}
-        url = build_api_url(base_url, f"workoutlog/{log_id}/")
-        return await api_request("GET", url, headers)
-
-    elif action == "delete_log":
-        if not log_id:
-            return {"error": "log_id is required for 'delete_log' action"}
-        url = build_api_url(base_url, f"workoutlog/{log_id}/")
-        return await api_request("DELETE", url, headers)
-
-    else:
-        return {
-            "error": f"Unknown action '{action}'. Use: list, get, create, update, delete, list_logs, create_log, get_log, delete_log"
-        }
+async def get_exercise(exercise_id: int) -> dict:
+    """Get details of a specific exercise by its ID."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/exercise/{exercise_id}/", headers=get_headers(), params={"format": "json"})
+        response.raise_for_status()
+        return response.json()
 
 
 @mcp.tool()
-async def manage_user_profile(
-    base_url: str,
-    auth_token: str,
-    action: str,
-    data: Optional[str] = None,
+async def search_exercises(term: str, language: str = "english", format: str = "json") -> dict:
+    """Search for exercises by name. Returns a list of matching exercises."""
+    params = {"term": term, "language": language, "format": format}
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/exercise/search/", headers=get_headers(), params=params)
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def list_exercise_categories() -> dict:
+    """List all exercise categories (e.g. Abs, Arms, Back, Chest, Legs, Shoulders)."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/exercisecategory/", headers=get_headers(), params={"format": "json"})
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def list_muscles() -> dict:
+    """List all muscles in the wger database."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/muscle/", headers=get_headers(), params={"format": "json"})
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def list_equipment() -> dict:
+    """List all equipment types (e.g. Barbell, Dumbbell, Kettlebell, etc.)."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/equipment/", headers=get_headers(), params={"format": "json"})
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def list_exercise_info(offset: int = 0, limit: int = 20) -> dict:
+    """List exercises with full information including muscles, equipment, images, and translations."""
+    params = {"offset": offset, "limit": limit, "format": "json"}
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/exerciseinfo/", headers=get_headers(), params=params)
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def get_exercise_info(exercise_id: int) -> dict:
+    """Get full exercise info (muscles, equipment, images, translations) for a specific exercise ID."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/exerciseinfo/{exercise_id}/", headers=get_headers(), params={"format": "json"})
+        response.raise_for_status()
+        return response.json()
+
+
+# ─── Workout / Routine Tools ──────────────────────────────────────────────────
+
+@mcp.tool()
+async def list_workouts(offset: int = 0, limit: int = 20) -> dict:
+    """List all workouts for the authenticated user."""
+    params = {"offset": offset, "limit": limit, "format": "json"}
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/workout/", headers=get_headers(), params=params)
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def get_workout(workout_id: int) -> dict:
+    """Get details of a specific workout by its ID."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/workout/{workout_id}/", headers=get_headers(), params={"format": "json"})
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def create_workout(description: Optional[str] = None) -> dict:
+    """Create a new workout for the authenticated user. Optionally provide a description."""
+    payload = {}
+    if description:
+        payload["description"] = description
+    async with httpx.AsyncClient() as client:
+        response = await client.post(f"{BASE_URL}/workout/", headers=get_headers(), json=payload)
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def delete_workout(workout_id: int) -> dict:
+    """Delete a specific workout by its ID."""
+    async with httpx.AsyncClient() as client:
+        response = await client.delete(f"{BASE_URL}/workout/{workout_id}/", headers=get_headers())
+        if response.status_code == 204:
+            return {"success": True, "message": f"Workout {workout_id} deleted successfully."}
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def get_workout_canonical(workout_id: int) -> dict:
+    """Get the canonical (full structured) representation of a workout including all days, sets, and exercises."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/workout/{workout_id}/canonical_representation/", headers=get_headers(), params={"format": "json"})
+        response.raise_for_status()
+        return response.json()
+
+
+# ─── Training Day Tools ───────────────────────────────────────────────────────
+
+@mcp.tool()
+async def list_days(training: Optional[int] = None, offset: int = 0, limit: int = 20) -> dict:
+    """List all training days, optionally filtered by workout ID."""
+    params = {"offset": offset, "limit": limit, "format": "json"}
+    if training is not None:
+        params["training"] = training
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/day/", headers=get_headers(), params=params)
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def create_day(workout_id: int, name: str, day_of_week: Optional[list] = None) -> dict:
+    """Create a new training day in a workout. day_of_week is a list of integers (1=Monday...7=Sunday)."""
+    payload = {"training": workout_id, "name": name}
+    if day_of_week:
+        payload["day"] = day_of_week
+    async with httpx.AsyncClient() as client:
+        response = await client.post(f"{BASE_URL}/day/", headers=get_headers(), json=payload)
+        response.raise_for_status()
+        return response.json()
+
+
+# ─── Exercise Set Tools ───────────────────────────────────────────────────────
+
+@mcp.tool()
+async def list_sets(exercise_day: Optional[int] = None, offset: int = 0, limit: int = 20) -> dict:
+    """List all exercise sets, optionally filtered by day ID."""
+    params = {"offset": offset, "limit": limit, "format": "json"}
+    if exercise_day is not None:
+        params["exerciseday"] = exercise_day
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/set/", headers=get_headers(), params=params)
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def create_set(exercise_day_id: int, sets: int = 3) -> dict:
+    """Create a new exercise set container in a training day."""
+    payload = {"exerciseday": exercise_day_id, "sets": sets}
+    async with httpx.AsyncClient() as client:
+        response = await client.post(f"{BASE_URL}/set/", headers=get_headers(), json=payload)
+        response.raise_for_status()
+        return response.json()
+
+
+# ─── Setting (Exercise within Set) Tools ─────────────────────────────────────
+
+@mcp.tool()
+async def list_settings(set_id: Optional[int] = None, offset: int = 0, limit: int = 20) -> dict:
+    """List all settings (exercises within sets), optionally filtered by set ID."""
+    params = {"offset": offset, "limit": limit, "format": "json"}
+    if set_id is not None:
+        params["set"] = set_id
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/setting/", headers=get_headers(), params=params)
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def create_setting(
+    set_id: int,
+    exercise_id: int,
+    reps: Optional[int] = None,
+    weight: Optional[float] = None,
+    rir: Optional[int] = None,
+    weight_unit: Optional[int] = None
 ) -> dict:
-    """Retrieve and update the authenticated user's profile settings including personal details, fitness goals, and preferences."""
-    headers = build_headers(auth_token)
-    json_data = json.loads(data) if data else None
+    """Add an exercise to a set with optional reps, weight, RIR (reps in reserve), and weight unit ID."""
+    payload = {"set": set_id, "exercise": exercise_id}
+    if reps is not None:
+        payload["reps"] = reps
+    if weight is not None:
+        payload["weight"] = weight
+    if rir is not None:
+        payload["rir"] = rir
+    if weight_unit is not None:
+        payload["weight_unit"] = weight_unit
+    async with httpx.AsyncClient() as client:
+        response = await client.post(f"{BASE_URL}/setting/", headers=get_headers(), json=payload)
+        response.raise_for_status()
+        return response.json()
 
-    if action == "get_profile":
-        results = {}
-        # Get user profile
-        url = build_api_url(base_url, "userprofile/")
-        results["profile"] = await api_request("GET", url, headers)
-        return results
 
-    elif action == "update_profile":
-        # Get profile first to find the ID
-        url = build_api_url(base_url, "userprofile/")
-        profile_result = await api_request("GET", url, headers)
-        profile_data = profile_result.get("data", {})
-        results_list = profile_data.get("results", [])
+# ─── Workout Log Tools ────────────────────────────────────────────────────────
 
-        if not results_list:
-            return {"error": "Could not fetch user profile to update"}
+@mcp.tool()
+async def list_workout_logs(
+    workout: Optional[int] = None,
+    exercise: Optional[int] = None,
+    offset: int = 0,
+    limit: int = 20
+) -> dict:
+    """List workout log entries. Optionally filter by workout ID or exercise ID."""
+    params = {"offset": offset, "limit": limit, "format": "json"}
+    if workout is not None:
+        params["workout"] = workout
+    if exercise is not None:
+        params["exercise"] = exercise
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/workoutsession/", headers=get_headers(), params=params)
+        response.raise_for_status()
+        return response.json()
 
-        profile_id = results_list[0].get("id")
-        if not profile_id:
-            return {"error": "Could not determine profile ID"}
 
-        update_url = build_api_url(base_url, f"userprofile/{profile_id}/")
-        return await api_request("PATCH", update_url, headers, json_data=json_data or {})
+@mcp.tool()
+async def create_workout_session(
+    workout_id: int,
+    date: str,
+    notes: Optional[str] = None,
+    impression: Optional[str] = None,
+    time_start: Optional[str] = None,
+    time_end: Optional[str] = None
+) -> dict:
+    """Log a workout session. Date in YYYY-MM-DD format. Impression: '1' (General), '2' (Burned out), '3' (Good)."""
+    payload = {"workout": workout_id, "date": date}
+    if notes:
+        payload["notes"] = notes
+    if impression:
+        payload["impression"] = impression
+    if time_start:
+        payload["time_start"] = time_start
+    if time_end:
+        payload["time_end"] = time_end
+    async with httpx.AsyncClient() as client:
+        response = await client.post(f"{BASE_URL}/workoutsession/", headers=get_headers(), json=payload)
+        response.raise_for_status()
+        return response.json()
 
-    elif action == "list_users":
-        url = build_api_url(base_url, "gym/userconfig/")
-        return await api_request("GET", url, headers)
 
-    elif action == "get_preferences":
-        results = {}
-        url = build_api_url(base_url, "userprofile/")
-        results["profile"] = await api_request("GET", url, headers)
-        # Also get language list
-        lang_url = build_api_url(base_url, "language/")
-        results["languages"] = await api_request("GET", lang_url, headers)
-        return results
+@mcp.tool()
+async def list_logs(
+    exercise: Optional[int] = None,
+    workout: Optional[int] = None,
+    offset: int = 0,
+    limit: int = 20
+) -> dict:
+    """List individual exercise log entries (sets/reps/weights logged). Optionally filter by exercise or workout."""
+    params = {"offset": offset, "limit": limit, "format": "json"}
+    if exercise is not None:
+        params["exercise"] = exercise
+    if workout is not None:
+        params["workout"] = workout
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/log/", headers=get_headers(), params=params)
+        response.raise_for_status()
+        return response.json()
 
-    elif action == "get_gym_info":
-        url = build_api_url(base_url, "gym/gym/")
-        return await api_request("GET", url, headers)
 
-    else:
-        return {
-            "error": f"Unknown action '{action}'. Use: get_profile, update_profile, list_users, get_preferences, get_gym_info"
-        }
+@mcp.tool()
+async def create_log(
+    workout_session_id: int,
+    exercise_id: int,
+    reps: int,
+    weight: float,
+    date: str,
+    weight_unit: Optional[int] = None,
+    rir: Optional[int] = None
+) -> dict:
+    """Log a specific exercise set (reps and weight) for a workout session. Date in YYYY-MM-DD format."""
+    payload = {
+        "workout": workout_session_id,
+        "exercise": exercise_id,
+        "reps": reps,
+        "weight": weight,
+        "date": date
+    }
+    if weight_unit is not None:
+        payload["weight_unit"] = weight_unit
+    if rir is not None:
+        payload["rir"] = rir
+    async with httpx.AsyncClient() as client:
+        response = await client.post(f"{BASE_URL}/log/", headers=get_headers(), json=payload)
+        response.raise_for_status()
+        return response.json()
+
+
+# ─── Body Weight Tools ────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def list_body_weight(offset: int = 0, limit: int = 20) -> dict:
+    """List body weight entries for the authenticated user."""
+    params = {"offset": offset, "limit": limit, "format": "json"}
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/weightentry/", headers=get_headers(), params=params)
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def create_body_weight(date: str, weight: float) -> dict:
+    """Log a body weight entry. Date in YYYY-MM-DD format, weight in kg."""
+    payload = {"date": date, "weight": weight}
+    async with httpx.AsyncClient() as client:
+        response = await client.post(f"{BASE_URL}/weightentry/", headers=get_headers(), json=payload)
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def delete_body_weight(entry_id: int) -> dict:
+    """Delete a specific body weight entry by its ID."""
+    async with httpx.AsyncClient() as client:
+        response = await client.delete(f"{BASE_URL}/weightentry/{entry_id}/", headers=get_headers())
+        if response.status_code == 204:
+            return {"success": True, "message": f"Weight entry {entry_id} deleted."}
+        response.raise_for_status()
+        return response.json()
+
+
+# ─── Nutrition Tools ──────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def list_nutrition_plans(offset: int = 0, limit: int = 20) -> dict:
+    """List all nutrition plans for the authenticated user."""
+    params = {"offset": offset, "limit": limit, "format": "json"}
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/nutritionplan/", headers=get_headers(), params=params)
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def get_nutrition_plan(plan_id: int) -> dict:
+    """Get details of a specific nutrition plan by its ID."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/nutritionplan/{plan_id}/", headers=get_headers(), params={"format": "json"})
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def get_nutrition_plan_nutritional_values(plan_id: int) -> dict:
+    """Get the computed nutritional values (calories, protein, carbs, fat) for a nutrition plan."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/nutritionplan/{plan_id}/nutritional_values/", headers=get_headers(), params={"format": "json"})
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def create_nutrition_plan(description: Optional[str] = None, only_logging: bool = False) -> dict:
+    """Create a new nutrition plan. Optionally set a description and whether it's only for logging."""
+    payload = {"only_logging": only_logging}
+    if description:
+        payload["description"] = description
+    async with httpx.AsyncClient() as client:
+        response = await client.post(f"{BASE_URL}/nutritionplan/", headers=get_headers(), json=payload)
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def list_meals(plan: Optional[int] = None, offset: int = 0, limit: int = 20) -> dict:
+    """List all meals, optionally filtered by nutrition plan ID."""
+    params = {"offset": offset, "limit": limit, "format": "json"}
+    if plan is not None:
+        params["plan"] = plan
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/meal/", headers=get_headers(), params=params)
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def create_meal(plan_id: int, name: Optional[str] = None, time: Optional[str] = None) -> dict:
+    """Create a new meal in a nutrition plan. Time format: HH:MM:SS."""
+    payload = {"plan": plan_id}
+    if name:
+        payload["name"] = name
+    if time:
+        payload["time"] = time
+    async with httpx.AsyncClient() as client:
+        response = await client.post(f"{BASE_URL}/meal/", headers=get_headers(), json=payload)
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def list_meal_items(meal: Optional[int] = None, offset: int = 0, limit: int = 20) -> dict:
+    """List all meal items (food + amount), optionally filtered by meal ID."""
+    params = {"offset": offset, "limit": limit, "format": "json"}
+    if meal is not None:
+        params["meal"] = meal
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/mealitem/", headers=get_headers(), params=params)
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def create_meal_item(
+    meal_id: int,
+    ingredient_id: int,
+    amount: float,
+    weight_unit: Optional[int] = None
+) -> dict:
+    """Add a food ingredient to a meal with a specified amount (in grams by default)."""
+    payload = {"meal": meal_id, "ingredient": ingredient_id, "amount": amount}
+    if weight_unit is not None:
+        payload["weight_unit"] = weight_unit
+    async with httpx.AsyncClient() as client:
+        response = await client.post(f"{BASE_URL}/mealitem/", headers=get_headers(), json=payload)
+        response.raise_for_status()
+        return response.json()
+
+
+# ─── Ingredient / Food Tools ──────────────────────────────────────────────────
+
+@mcp.tool()
+async def search_ingredients(name: str, language: Optional[str] = None, offset: int = 0, limit: int = 20) -> dict:
+    """Search for food ingredients/items by name in the wger food database."""
+    params = {"name": name, "offset": offset, "limit": limit, "format": "json"}
+    if language:
+        params["language"] = language
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/ingredient/", headers=get_headers(), params=params)
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def get_ingredient(ingredient_id: int) -> dict:
+    """Get detailed nutritional information for a specific food ingredient by its ID."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/ingredient/{ingredient_id}/", headers=get_headers(), params={"format": "json"})
+        response.raise_for_status()
+        return response.json()
+
+
+# ─── Measurement Tools ────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def list_measurement_categories() -> dict:
+    """List all measurement categories (e.g. chest, waist, arms) for the authenticated user."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/measurement-category/", headers=get_headers(), params={"format": "json"})
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def create_measurement_category(name: str, unit: str) -> dict:
+    """Create a new measurement category (e.g. 'Chest' in 'cm')."""
+    payload = {"name": name, "unit": unit}
+    async with httpx.AsyncClient() as client:
+        response = await client.post(f"{BASE_URL}/measurement-category/", headers=get_headers(), json=payload)
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def list_measurements(category: Optional[int] = None, offset: int = 0, limit: int = 20) -> dict:
+    """List measurement entries, optionally filtered by category ID."""
+    params = {"offset": offset, "limit": limit, "format": "json"}
+    if category is not None:
+        params["category"] = category
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/measurement/", headers=get_headers(), params=params)
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def create_measurement(category_id: int, date: str, value: float) -> dict:
+    """Log a new measurement entry. Date in YYYY-MM-DD format."""
+    payload = {"category": category_id, "date": date, "value": value}
+    async with httpx.AsyncClient() as client:
+        response = await client.post(f"{BASE_URL}/measurement/", headers=get_headers(), json=payload)
+        response.raise_for_status()
+        return response.json()
+
+
+# ─── Nutrition Diary Tools ────────────────────────────────────────────────────
+
+@mcp.tool()
+async def list_nutrition_diary(
+    plan: Optional[int] = None,
+    ingredient: Optional[int] = None,
+    offset: int = 0,
+    limit: int = 20
+) -> dict:
+    """List nutrition diary entries. Optionally filter by plan ID or ingredient ID."""
+    params = {"offset": offset, "limit": limit, "format": "json"}
+    if plan is not None:
+        params["plan"] = plan
+    if ingredient is not None:
+        params["ingredient"] = ingredient
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/nutritiondiary/", headers=get_headers(), params=params)
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def create_nutrition_diary(
+    plan_id: int,
+    ingredient_id: int,
+    amount: float,
+    datetime_str: Optional[str] = None,
+    weight_unit: Optional[int] = None
+) -> dict:
+    """Log food intake to the nutrition diary. datetime_str in ISO format (YYYY-MM-DDTHH:MM:SS)."""
+    payload = {"plan": plan_id, "ingredient": ingredient_id, "amount": amount}
+    if datetime_str:
+        payload["datetime"] = datetime_str
+    if weight_unit is not None:
+        payload["weight_unit"] = weight_unit
+    async with httpx.AsyncClient() as client:
+        response = await client.post(f"{BASE_URL}/nutritiondiary/", headers=get_headers(), json=payload)
+        response.raise_for_status()
+        return response.json()
+
+
+# ─── User Profile Tools ───────────────────────────────────────────────────────
+
+@mcp.tool()
+async def get_user_profile() -> dict:
+    """Get the profile information for the authenticated user."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/userprofile/", headers=get_headers(), params={"format": "json"})
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def get_gym_user_config() -> dict:
+    """Get the gym/user configuration for the authenticated user."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/gym/userconfig/", headers=get_headers(), params={"format": "json"})
+        response.raise_for_status()
+        return response.json()
 
 
 
